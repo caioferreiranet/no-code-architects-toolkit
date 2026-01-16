@@ -19,6 +19,7 @@
 import os
 import json
 import logging
+import mimetypes
 from google.oauth2 import service_account
 from google.cloud import storage
 from google.cloud.run_v2 import JobsClient, RunJobRequest
@@ -62,10 +63,15 @@ def upload_to_gcs(file_path, bucket_name=GCP_BUCKET_NAME):
         raise ValueError("GCS client is not initialized. Skipping file upload.")
 
     try:
+        # Detect content type from file extension
+        content_type, _ = mimetypes.guess_type(file_path)
+        if content_type is None:
+            content_type = 'application/octet-stream'
+
         logger.info(f"Uploading file to Google Cloud Storage: {file_path}")
         bucket = gcs_client.bucket(bucket_name)
         blob = bucket.blob(os.path.basename(file_path))
-        blob.upload_from_filename(file_path)
+        blob.upload_from_filename(file_path, content_type=content_type)
         logger.info(f"File uploaded successfully to GCS: {blob.public_url}")
         return blob.public_url
     except Exception as e:

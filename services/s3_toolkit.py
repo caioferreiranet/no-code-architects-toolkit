@@ -19,6 +19,7 @@
 import os
 import boto3
 import logging
+import mimetypes
 from urllib.parse import urlparse, quote
 
 logger = logging.getLogger(__name__)
@@ -36,9 +37,22 @@ def upload_to_s3(file_path, s3_url, access_key, secret_key, bucket_name, region)
     client = session.client('s3', endpoint_url=s3_url)
 
     try:
+        # Detect content type from file extension
+        content_type, _ = mimetypes.guess_type(file_path)
+        if content_type is None:
+            content_type = 'application/octet-stream'
+
         # Upload the file to the specified S3 bucket
         with open(file_path, 'rb') as data:
-            client.upload_fileobj(data, bucket_name, os.path.basename(file_path), ExtraArgs={'ACL': 'public-read'})
+            client.upload_fileobj(
+                data,
+                bucket_name,
+                os.path.basename(file_path),
+                ExtraArgs={
+                    'ACL': 'public-read',
+                    'ContentType': content_type
+                }
+            )
 
         # URL encode the filename for the URL
         encoded_filename = quote(os.path.basename(file_path))

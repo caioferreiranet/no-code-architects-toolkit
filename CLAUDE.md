@@ -26,6 +26,10 @@ No-Code Architects Toolkit API is a Flask-based media processing API that handle
   - Validates required environment variables per storage provider
   - Configures API_KEY, storage paths, and cloud credentials
 
+- **[gunicorn.conf.py](gunicorn.conf.py)** - Gunicorn server configuration
+  - Contains `when_ready` hook for GCP Cloud Run Job execution
+  - `cloud_run_job_task()` auto-triggers job request at startup when `CLOUD_RUN_JOB` env is set
+
 ### Request Flow
 
 1. Request hits route in `routes/v1/{category}/{action}.py`
@@ -34,12 +38,22 @@ No-Code Architects Toolkit API is a Flask-based media processing API that handle
 4. `@queue_task_wrapper()` determines processing path:
    - **No webhook_url**: Execute synchronously, return immediately
    - **With webhook_url**: Queue task, return 202, send webhook when done
-   - **GCP_JOB_NAME set + webhook_url**: Trigger Cloud Run Job, return 202
+   - **GCP_JOB_NAME set + webhook_url**: Trigger Cloud Run Job, return 202 (unless `disable_cloud_job: true` in payload)
    - **CLOUD_RUN_JOB env set**: Execute synchronously in job context
 
-5. Route calls service function in `services/v1/{category}/{action}.py`
+5. Route calls service function in `services/v1/{category}/{action}.py` (or contains logic inline for simpler routes)
 6. Service processes media, uploads to cloud storage, returns result
 7. Route returns tuple: `(response_data, endpoint_string, status_code)`
+
+**IMPORTANT: Decorator Order**
+Decorators must be applied in this exact order:
+```python
+@blueprint.route(...)
+@authenticate           # First: validates API key
+@validate_payload(...)  # Second: validates JSON schema
+@queue_task_wrapper()   # Third: handles queue/sync processing
+def handler(job_id, data):
+```
 
 ### Job Processing Modes
 
@@ -98,6 +112,21 @@ See [docs/adding_routes.md](docs/adding_routes.md) for detailed guide.
 - Digital Ocean: Extracts bucket/region from endpoint URL if not provided
 
 Service functions call `upload_file(local_path)` which returns public URL.
+
+### File Management Pattern
+
+Use `services/file_management.py` for downloading files:
+```python
+from services.file_management import download_file
+from config import LOCAL_STORAGE_PATH
+
+local_path = download_file(url, LOCAL_STORAGE_PATH)
+# Process file...
+# Clean up after upload
+os.remove(local_path)
+```
+
+Always clean up temporary files after uploading to cloud storage.
 
 ## Development Commands
 
@@ -169,13 +198,15 @@ S3-Compatible:
 - `GUNICORN_TIMEOUT` - Worker timeout seconds (default: 30)
 - `GCP_JOB_NAME` - Cloud Run Job name for offloading
 - `GCP_JOB_LOCATION` - Cloud Run Job region (default: us-central1)
+- `DISABLE_CLOUD_JOB` - Set to "true" to disable Cloud Run Job offloading globally (can be overridden per-request with `disable_cloud_job` in payload)
 
 ## Key Patterns
 
 ### Route Structure
 - Routes in `routes/v1/{category}/{action}.py`
-- Services in `services/v1/{category}/{action}.py`
+- Services in `services/v1/{category}/{action}.py` (optional - simpler routes can have logic inline)
 - Documentation in `docs/{category}/{action}.md`
+- Legacy routes exist in `routes/` root (not in v1 structure) - new routes should use v1 pattern
 
 ### Return Format
 All routes return: `(response_dict, endpoint_string, http_status_code)`
@@ -220,6 +251,9 @@ input_stream = ffmpeg.input(video_path)
 output = ffmpeg.output(input_stream, output_path, **options)
 ffmpeg.run(output, overwrite_output=True)
 ```
+
+### Build Number
+The build number is stored in `version.py` and auto-incremented by GitHub Actions. It's included in all API responses.
 
 ## Adding New Features
 
